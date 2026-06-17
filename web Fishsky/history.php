@@ -1,0 +1,27 @@
+<?php
+
+header('Content-Type: application/json');
+
+$conn = new mysqli(
+    "localhost",
+    "root",
+    "",
+    "iot_monitoring"
+);
+
+$sql = "
+SELECT *
+FROM history
+ORDER BY id DESC
+LIMIT 100
+";
+
+$result = $conn->query($sql);
+
+$data = [];
+
+while($row = $result->fetch_assoc()){
+    $data[] = $row;
+}
+
+echo json_encode($data);
