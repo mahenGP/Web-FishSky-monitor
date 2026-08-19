@@ -1,1362 +1,2977 @@
-// ======================================
-// NAVIGATION
-// ======================================
+// ============================================================
+// SCRIPT.JS FINAL
+// IoT MONITORING KOLAM
+//
+// HTML  : index.html
+// CSS   : style.css
+// BACKEND: Node.js + Express
+//
+// API:
+// GET  /api/realtime
+// GET  /api/history
+// POST /api/control/mode
+// POST /api/control/pompa_asam
+// POST /api/control/pompa_basa
+// ============================================================
 
-const titles = {
-    dashboard: "Dashboard",
-    data: "Data Sensor",
-    settings: "Settings"
-};
 
-function navigate(page) {
+// ============================================================
+// VARIABEL GLOBAL
+// ============================================================
 
-    document
-        .querySelectorAll(".page")
-        .forEach(p => p.classList.remove("active"));
+const API_BASE = "/api";
 
-    document
-        .querySelectorAll(".nav-item")
-        .forEach(n => {
-            n.classList.toggle(
-                "active",
-                n.dataset.page === page
-            );
-        });
+const API_REALTIME = `${API_BASE}/realtime`;
+const API_HISTORY = `${API_BASE}/history`;
 
-    const el =
-        document.getElementById(
-            "page-" + page
-        );
+const API_MODE =
+    `${API_BASE}/control/mode`;
 
-    if (el)
-        el.classList.add("active");
+const API_POMPA_ASAM =
+    `${API_BASE}/control/pompa_asam`;
 
-    document.getElementById(
-        "topbar-page-title"
-    ).textContent =
-        titles[page] || page;
+const API_POMPA_BASA =
+    `${API_BASE}/control/pompa_basa`;
+
+
+let currentMode = "AUTO";
+
+let currentPompaAsam = "OFF";
+
+let currentPompaBasa = "OFF";
+
+let historyData = [];
+
+let phChart = null;
+
+let tempChart = null;
+
+
+// ============================================================
+// HELPER
+// ============================================================
+
+function getElement(id) {
+
+    return document.getElementById(id);
+
 }
 
-document
-.querySelectorAll(".nav-item[data-page]")
-.forEach(btn => {
 
-    btn.addEventListener(
-        "click",
-        () => navigate(btn.dataset.page)
-    );
+function setText(id, value) {
 
-});
+    const element =
+        getElement(id);
 
+    if (element) {
 
-// ======================================
-// CHART DEFAULTS
-// ======================================
-
-const chartDefaults = {
-
-    responsive: true,
-
-    maintainAspectRatio: false,
-
-    plugins: {
-        legend: {
-            display: false
-        }
-    },
-
-    scales: {
-
-        x: {
-            grid: {
-                color:
-                "rgba(255,255,255,0.04)"
-            },
-            ticks: {
-                color: "#90b4e8",
-                font: {
-                    size: 10
-                }
-            }
-        },
-
-        y: {
-            grid: {
-                color:
-                "rgba(255,255,255,0.04)"
-            },
-            ticks: {
-                color: "#90b4e8",
-                font: {
-                    size: 10
-                }
-            }
-        }
+        element.textContent =
+            value ?? "-";
 
     }
 
-};
+}
 
 
-// ======================================
-// CREATE CHART
-// ======================================
+// ============================================================
+// FORMAT ESTIMASI (ETA) WAKTU MENUJU NORMAL
+//
+// Nilai `estimasi` dari ESP32 satuannya MENIT (desimal).
+// Fungsi ini otomatis pilih satuan paling pas:
+// - < 1 menit   -> tampil dalam detik
+// - < 60 menit  -> tampil dalam menit
+// - >= 60 menit -> tampil dalam jam (+ menit sisa)
+// ============================================================
 
-function makeChart(
-    id,
-    color,
-    data,
-    labels
+function formatEtaDuration(
+    menit
 ) {
-
-    return new Chart(
-        document.getElementById(id),
-        {
-
-            type: "line",
-
-            data: {
-
-                labels: labels,
-
-                datasets: [
-                    {
-                        data: data,
-
-                        borderColor: color,
-
-                        borderWidth: 2,
-
-                        pointRadius: 3,
-
-                        pointBackgroundColor:
-                            color,
-
-                        fill: true,
-
-                        backgroundColor:
-                            color
-                            .replace(")", ",0.08)")
-                            .replace(
-                                "rgb",
-                                "rgba"
-                            ),
-
-                        tension: 0.4
-                    }
-                ]
-
-            },
-
-            options: {
-                ...chartDefaults
-            }
-
-        }
-    );
-
-}
-
-
-// ======================================
-// DEMO DATA
-// ======================================
-
-const demoLabels = [
-    "10:27",
-    "10:28",
-    "10:29",
-    "10:30",
-    "10:31",
-    "10:32",
-    "10:33",
-    "10:34",
-    "10:35",
-    "10:36"
-];
-
-const demoPH = [
-    11,12,10,13,9,
-    8,11,10,12,11
-];
-
-const demoTemp = [
-    42,44,40,48,36,
-    38,40,45,43,42
-];
-
-let chartPH =
-    makeChart(
-        "chart-ph",
-        "rgb(74,222,128)",
-        demoPH,
-        demoLabels
-    );
-
-let chartTemp =
-    makeChart(
-        "chart-temp",
-        "rgb(251,146,60)",
-        demoTemp,
-        demoLabels
-    );
-    // ======================================
-// FUZZY MEMBERSHIP FUNCTION
-// ======================================
-
-function trimf(x, a, b, c) {
-
-    if (x <= a || x >= c)
-        return 0;
-
-    if (x < b)
-        return (x - a) / (b - a);
-
-    return (c - x) / (c - b);
-}
-
-function trapmf(x, a, b, c, d) {
-
-    if (x <= a || x >= d)
-        return 0;
-
-    if (x >= b && x <= c)
-        return 1;
-
-    if (x < b)
-        return (x - a) / (b - a);
-
-    return (d - x) / (d - c);
-}
-
-
-// ======================================
-// FUZZY CALCULATION
-// ======================================
-
-function computeFuzzy(ph, temp) {
-
-    // pH Membership
-    const phLow =
-        trapmf(ph, 0, 0, 6.0, 6.8);
-
-    const phNormal =
-        trimf(ph, 6.5, 7.5, 8.5);
-
-    const phHigh =
-        trapmf(ph, 8.0, 8.5, 14, 14);
-
-    // Temperature Membership
-    const tCold =
-        trapmf(temp, 0, 0, 24, 28);
-
-    const tNormal =
-        trimf(temp, 25, 30, 35);
-
-    const tHot =
-        trapmf(temp, 32, 36, 60, 60);
-
-    // Rule Base
-    const rules = [
-
-        {
-            weight:
-                Math.min(
-                    phNormal,
-                    tNormal
-                ),
-            center: 0.8
-        },
-
-        {
-            weight:
-                Math.min(
-                    phLow,
-                    tNormal
-                ),
-            center: 0.45
-        },
-
-        {
-            weight:
-                Math.min(
-                    phHigh,
-                    tNormal
-                ),
-            center: 0.45
-        },
-
-        {
-            weight:
-                Math.min(
-                    phNormal,
-                    tHot
-                ),
-            center: 0.5
-        },
-
-        {
-            weight:
-                Math.min(
-                    phNormal,
-                    tCold
-                ),
-            center: 0.6
-        },
-
-        {
-            weight:
-                Math.min(
-                    phLow,
-                    tHot
-                ),
-            center: 0.2
-        },
-
-        {
-            weight:
-                Math.min(
-                    phHigh,
-                    tCold
-                ),
-            center: 0.3
-        }
-
-    ];
-
-    const num =
-        rules.reduce(
-            (s, r) =>
-                s + r.weight * r.center,
-            0
-        );
-
-    const den =
-        rules.reduce(
-            (s, r) =>
-                s + r.weight,
-            0
-        ) || 1;
-
-    const crisp = num / den;
-
-    return {
-
-        phLow,
-        phNormal,
-        phHigh,
-
-        tCold,
-        tNormal,
-        tHot,
-
-        crisp
-
-    };
-}
-
-
-// ======================================
-// WATER QUALITY STATUS
-// ======================================
-
-function getWaterQuality(crisp) {
-
-    if (crisp >= 0.75) {
-
-        return {
-            label: "Sangat Baik",
-            fit: "Layak Konsumsi",
-            color: "#4ade80",
-            bar: crisp * 100,
-            rec: "Pertahankan kondisi"
-        };
-
-    }
-
-    if (crisp >= 0.55) {
-
-        return {
-            label: "Baik",
-            fit: "Layak Budidaya",
-            color: "#22d3ee",
-            bar: crisp * 100,
-            rec: "Pantau berkala"
-        };
-
-    }
-
-    if (crisp >= 0.35) {
-
-        return {
-            label: "Sedang",
-            fit: "Perlu Perhatian",
-            color: "#facc15",
-            bar: crisp * 100,
-            rec: "Aktifkan aerasi"
-        };
-
-    }
-
-    return {
-
-        label: "Buruk",
-        fit: "Tidak Layak",
-        color: "#f87171",
-        bar: crisp * 100,
-        rec: "Segera tangani!"
-
-    };
-}
-
-
-// ======================================
-// PUMP SETTINGS
-// ======================================
-
-function getPumpSettings(
-    ph,
-    temp,
-    crisp
-) {
-
-    const aerRPM =
-        Math.round(
-            800 + (1 - crisp) * 1200
-        );
-
-    const circRPM =
-        Math.round(
-            500 + (1 - crisp) * 700
-        );
-
-    const phDose =
-        ph < 6.5
-        ? Math.round((6.8 - ph) * 20)
-        : ph > 8.5
-        ? Math.round((ph - 8.2) * 15)
-        : 0;
-
-    const power =
-        Math.round(
-            aerRPM * 0.04 +
-            circRPM * 0.03 +
-            phDose * 0.5
-        );
-
-    const eff =
-        Math.round(
-            70 + crisp * 28
-        );
-
-    return {
-
-        aerRPM,
-        circRPM,
-        phDose,
-
-        aerOn:
-            crisp < 0.75,
-
-        circOn: true,
-
-        phOn:
-            phDose > 0,
-
-        power,
-        eff
-
-    };
-}
-
-
-// ======================================
-// TOGGLE PUMP
-// ======================================
-
-function togglePump(n) {
-
-    const cb =
-        document.getElementById(
-            "pump" + n + "-tog"
-        );
-
-    const sub =
-        document.getElementById(
-            "p" + n + "-sub"
-        );
-
-    const status =
-        cb.checked
-        ? "ON"
-        : "OFF";
-
-    sub.textContent =
-        status;
-
-    sub.style.color =
-        cb.checked
-        ? "#4ade80"
-        : "#90CAF9";
-
-    const pompa =
-        n === 1
-        ? "pompa_asam"
-        : "pompa_basa";
-
-    sendPumpControl(
-        pompa,
-        status
-    );
-}
-// ======================================
-// UPDATE FUZZY UI
-// ======================================
-
-function updateFuzzyUI(ph, temp) {
-
-    const fz =
-        computeFuzzy(ph, temp);
-
-    const wq =
-        getWaterQuality(
-            fz.crisp
-        );
-
-    const pm =
-        getPumpSettings(
-            ph,
-            temp,
-            fz.crisp
-        );
-
-    // Membership Value
-    document.getElementById(
-        "fz-ph-low"
-    ).textContent =
-        fz.phLow.toFixed(3);
-
-    document.getElementById(
-        "fz-ph-normal"
-    ).textContent =
-        fz.phNormal.toFixed(3);
-
-    document.getElementById(
-        "fz-ph-high"
-    ).textContent =
-        fz.phHigh.toFixed(3);
-
-    document.getElementById(
-        "fz-temp-cold"
-    ).textContent =
-        fz.tCold.toFixed(3);
-
-    document.getElementById(
-        "fz-temp-normal"
-    ).textContent =
-        fz.tNormal.toFixed(3);
-
-    document.getElementById(
-        "fz-temp-hot"
-    ).textContent =
-        fz.tHot.toFixed(3);
-
-    // Nilai Fuzzy
-    document.getElementById(
-        "fz-crisp-big"
-    ).textContent =
-        fz.crisp.toFixed(2);
-
-    // Status Air
-    document.getElementById(
-        "wq-label"
-    ).textContent =
-        wq.label;
-
-    const dot =
-        document.getElementById(
-            "wq-dot"
-        );
 
     if (
-        wq.label === "Sangat Baik" ||
-        wq.label === "Baik"
+        !Number.isFinite(menit) ||
+        menit < 0
     ) {
 
-        dot.className =
-            "wq-dot";
+        return "-";
 
     }
-    else if (
-        wq.label === "Sedang"
+
+
+    if (
+        menit < 1
     ) {
 
-        dot.className =
-            "wq-dot warn";
+        const detik =
+            Math.round(
+                menit * 60
+            );
+
+        return detik + " detik";
+
+    }
+
+
+    if (
+        menit < 60
+    ) {
+
+        return (
+            menit.toFixed(1) +
+            " menit"
+        );
+
+    }
+
+
+    const jam =
+        Math.floor(
+            menit / 60
+        );
+
+    const sisaMenit =
+        Math.round(
+            menit % 60
+        );
+
+    return (
+        jam +
+        " jam " +
+        sisaMenit +
+        " menit"
+    );
+
+}
+
+
+// ============================================================
+// MASA TENGGANG (GRACE PERIOD) UNTUK KONTROL MODE/POMPA
+//
+// Firmware ESP32 cuma publish ulang status (mode/pompa_asam/
+// pompa_basa) sekali per ~60 detik. Kalau setelah user klik
+// kontrol, polling realtime langsung menimpa currentMode/
+// currentPompaAsam/currentPompaBasa dengan data LAMA dari
+// database (karena ESP32 belum sempat publish ulang), tampilan
+// jadi kelihatan "balik sendiri" padahal perintahnya sebenarnya
+// sudah terkirim. Variabel di bawah ini menahan tampilan sesuai
+// pilihan user selama maksimal 65 detik, sampai ESP32 benar-benar
+// konfirmasi (atau waktu tenggang habis).
+// ============================================================
+
+const CONTROL_GRACE_MS = 65000;
+
+let pendingMode = null;
+let pendingModeAt = 0;
+
+let pendingPompaAsam = null;
+let pendingPompaAsamAt = 0;
+
+let pendingPompaBasa = null;
+let pendingPompaBasaAt = 0;
+
+
+function resolvePendingValue(
+    pendingValue,
+    pendingAt,
+    serverValue
+) {
+
+    if (
+        pendingValue === null
+    ) {
+
+        return {
+            value: serverValue,
+            stillPending: false
+        };
+
+    }
+
+
+    const expired =
+        (Date.now() - pendingAt) >
+        CONTROL_GRACE_MS;
+
+    const confirmed =
+        serverValue === pendingValue;
+
+
+    if (
+        expired ||
+        confirmed
+    ) {
+
+        return {
+            value: serverValue,
+            stillPending: false
+        };
+
+    }
+
+
+    // Server masih kirim data lama, tahan dulu
+    // tampilan sesuai pilihan user.
+    return {
+        value: pendingValue,
+        stillPending: true
+    };
+
+}
+
+
+function normalize(value) {
+
+    if (
+        value === null ||
+        value === undefined
+    ) {
+
+        return "";
+
+    }
+
+    return String(value)
+        .trim()
+        .toUpperCase();
+
+}
+
+
+function isPumpOn(value) {
+
+    const normalized =
+        normalize(value);
+
+    return (
+        normalized === "ON" ||
+        normalized === "1" ||
+        normalized === "TRUE"
+    );
+
+}
+
+
+// ============================================================
+// REALTIME
+// ============================================================
+        async function loadRealtime() {
+
+    try {
+
+        const response = await fetch(
+            API_REALTIME,
+            {
+                method: "GET",
+                cache: "no-store"
+            }
+        );
+
+        if (!response.ok) {
+            throw new Error(
+                "HTTP " + response.status
+            );
+        }
+
+        const result = await response.json();
+
+        console.log(
+            "Realtime API:",
+            result
+        );
+        
+        updateESPStatus(
+            result.esp_online,
+            result.last_seen_seconds
+        );
+
+
+        if (!result.success) {
+            console.warn(
+                "API realtime gagal",
+                result
+            );
+            return;
+        }
+        
+        
+        // ==========================================
+        // STATUS ESP32 ONLINE / OFFLINE
+        // ==========================================
+        
+        if (result.esp_online === true) {
+        
+            updateESPStatus(true);
+        
+        } else {
+        
+            updateESPStatus(false);
+        
+        }
+
+        const data =
+            result.data;
+            
+        // ==========================================
+        // UPDATE STATUS ESP32
+        // ==========================================
+        
+        // ========================================================
+        // STATUS ESP32 ONLINE / OFFLINE
+        // ========================================================
+        
+        const espOnline = result.esp_online === true;
+        
+        const espDot = document.getElementById("esp-dot");
+        const espStatus = document.getElementById("esp-status");
+        
+        if (espStatus) {
+            espStatus.textContent = espOnline
+                ? "Online"
+                : "Offline";
+        }
+        
+        if (espDot) {
+            espDot.classList.remove("online", "offline");
+        
+            espDot.classList.add(
+                espOnline
+                    ? "online"
+                    : "offline"
+            );
+        }
+        
+        // ========================================================
+        // UPDATE STATUS ESP32
+        // ========================================================
+        function updateESPStatus(isOnline, lastSeenSeconds) {
+        
+            const espStatus = getElement("esp-status");
+            const espDot = getElement("esp-dot");
+        
+            const online = isOnline === true;
+        
+            if (online) {
+        
+                // =========================
+                // ESP32 ONLINE
+                // =========================
+        
+                if (espStatus) {
+                    espStatus.textContent = "Online";
+                }
+        
+                if (espDot) {
+        
+                    espDot.classList.remove(
+                        "offline"
+                    );
+        
+                    espDot.classList.add(
+                        "online"
+                    );
+        
+                }
+        
+            } else {
+        
+                // =========================
+                // ESP32 OFFLINE
+                // =========================
+        
+                if (espStatus) {
+        
+                    if (
+                        typeof lastSeenSeconds === "number"
+                    ) {
+        
+                        espStatus.textContent =
+                            "Offline";
+        
+                    } else {
+        
+                        espStatus.textContent =
+                            "Offline";
+        
+                    }
+        
+                }
+        
+                if (espDot) {
+        
+                    espDot.classList.remove(
+                        "online"
+                    );
+        
+                    espDot.classList.add(
+                        "offline"
+                    );
+        
+                }
+        
+            }
+        
+        }
+
+
+        // ====================================================
+        // SUHU
+        // ====================================================
+
+        const suhu =
+            Number(data.suhu);
+
+
+        if (
+            Number.isFinite(suhu)
+        ) {
+
+            setText(
+                "temp-val",
+                suhu.toFixed(2)
+            );
+
+            updateTemperatureBadge(
+                suhu
+            );
+
+        }
+
+
+        // ====================================================
+        // pH
+        // ====================================================
+
+        const ph =
+            Number(data.ph);
+
+
+        if (
+            Number.isFinite(ph)
+        ) {
+
+            setText(
+                "ph-val",
+                ph.toFixed(2)
+            );
+
+            updatePHBadge(
+                ph
+            );
+
+        }
+
+
+        // ====================================================
+        // FUZZY
+        // ====================================================
+
+        const fuzzy =
+            Number(data.fuzzy);
+
+
+        if (
+            Number.isFinite(fuzzy)
+        ) {
+
+            setText(
+                "fz-crisp-big",
+                fuzzy.toFixed(2)
+            );
+
+        }
+
+
+        // ====================================================
+        // STATUS KUALITAS AIR
+        // ====================================================
+
+        updateWaterQuality(
+            data.status
+        );
+
+
+        // ====================================================
+        // ESTIMASI
+        // ====================================================
+
+        const estimasi =
+            Number(data.estimasi);
+
+
+        if (
+            Number.isFinite(estimasi)
+        ) {
+
+            setText(
+                "wq-eta-value",
+                formatEtaDuration(
+                    estimasi
+                )
+            );
+
+        }
+        else {
+
+            setText(
+                "wq-eta-value",
+                "-"
+            );
+
+        }
+
+
+        // ====================================================
+        // MODE
+        // ====================================================
+
+        if (
+            data.mode !== null &&
+            data.mode !== undefined
+        ) {
+
+            const serverMode =
+                normalize(
+                    data.mode
+                );
+
+            const resolvedMode =
+                resolvePendingValue(
+                    pendingMode,
+                    pendingModeAt,
+                    serverMode
+                );
+
+            currentMode =
+                resolvedMode.value;
+
+            if (
+                !resolvedMode.stillPending
+            ) {
+
+                pendingMode = null;
+
+            }
+
+        }
+
+
+        updateModeUI();
+
+
+        // ====================================================
+        // POMPA ASAM
+        // ====================================================
+
+        {
+
+            const serverPompaAsam =
+                isPumpOn(
+                    data.pompa_asam
+                )
+                    ? "ON"
+                    : "OFF";
+
+            const resolvedPompaAsam =
+                resolvePendingValue(
+                    pendingPompaAsam,
+                    pendingPompaAsamAt,
+                    serverPompaAsam
+                );
+
+            currentPompaAsam =
+                resolvedPompaAsam.value;
+
+            if (
+                !resolvedPompaAsam.stillPending
+            ) {
+
+                pendingPompaAsam = null;
+
+            }
+
+        }
+
+
+        updatePompaAsamUI();
+
+
+        // ====================================================
+        // POMPA BASA
+        // ====================================================
+
+        {
+
+            const serverPompaBasa =
+                isPumpOn(
+                    data.pompa_basa
+                )
+                    ? "ON"
+                    : "OFF";
+
+            const resolvedPompaBasa =
+                resolvePendingValue(
+                    pendingPompaBasa,
+                    pendingPompaBasaAt,
+                    serverPompaBasa
+                );
+
+            currentPompaBasa =
+                resolvedPompaBasa.value;
+
+            if (
+                !resolvedPompaBasa.stillPending
+            ) {
+
+                pendingPompaBasa = null;
+
+            }
+
+        }
+
+
+        updatePompaBasaUI();
+
+
+        // ====================================================
+        // WAKTU
+        // ====================================================
+
+        updateLastUpdate(
+            data.waktu
+        );
+
+
+    }
+    catch (error) {
+
+        console.error(
+            "Gagal mengambil realtime:",
+            error
+        );
+
+        setText(
+            "esp-status",
+            "Offline"
+        );
+
+        const espDot =
+            getElement("esp-dot");
+
+        if (espDot) {
+
+            espDot.classList.remove(
+                "online"
+            );
+
+            espDot.classList.add(
+                "offline"
+            );
+
+        }
+
+    }
+
+}
+
+
+// ============================================================
+// UPDATE BADGE pH
+// ============================================================
+
+function updatePHBadge(ph) {
+
+    const badge =
+        getElement("ph-badge");
+
+
+    if (!badge) {
+
+        return;
+
+    }
+
+
+    badge.classList.remove(
+        "badge-good",
+        "badge-warn",
+        "badge-danger"
+    );
+
+
+    if (
+        ph >= 6.5 &&
+        ph <= 8.5
+    ) {
+
+        badge.textContent =
+            "Normal";
+
+        badge.classList.add(
+            "badge-good"
+        );
+
+    }
+
+    else if (
+        ph < 6.5
+    ) {
+
+        badge.textContent =
+            "Rendah";
+
+        badge.classList.add(
+            "badge-warn"
+        );
+
+    }
+
+    else {
+
+        badge.textContent =
+            "Tinggi";
+
+        badge.classList.add(
+            "badge-danger"
+        );
+
+    }
+
+}
+
+
+// ============================================================
+// UPDATE BADGE SUHU
+// ============================================================
+
+function updateTemperatureBadge(
+    suhu
+) {
+
+    const badge =
+        getElement("temp-badge");
+
+
+    if (!badge) {
+
+        return;
+
+    }
+
+
+    badge.classList.remove(
+        "badge-good",
+        "badge-warn",
+        "badge-danger"
+    );
+
+
+    if (
+        suhu >= 20 &&
+        suhu <= 30
+    ) {
+
+        badge.textContent =
+            "Normal";
+
+        badge.classList.add(
+            "badge-good"
+        );
+
+    }
+
+    else if (
+        suhu < 20
+    ) {
+
+        badge.textContent =
+            "Rendah";
+
+        badge.classList.add(
+            "badge-warn"
+        );
+
+    }
+
+    else {
+
+        badge.textContent =
+            "Tinggi";
+
+        badge.classList.add(
+            "badge-danger"
+        );
+
+    }
+
+}
+
+
+// ============================================================
+// STATUS KUALITAS AIR
+// ============================================================
+
+function updateWaterQuality(
+    status
+) {
+
+    const statusValue =
+        normalize(status);
+
+
+    const label =
+        getElement("wq-label");
+
+
+    const dot =
+        getElement("wq-dot");
+
+
+    if (label) {
+
+        label.textContent =
+            statusValue || "-";
+
+        label.classList.remove(
+            "good",
+            "warn",
+            "bad"
+        );
+
+
+        if (
+            statusValue === "BAIK"
+        ) {
+
+            label.classList.add(
+                "good"
+            );
+
+        }
+
+        else if (
+            statusValue === "CUKUP"
+        ) {
+
+            label.classList.add(
+                "warn"
+            );
+
+        }
+
+        else if (
+            statusValue === "BURUK"
+        ) {
+
+            label.classList.add(
+                "bad"
+            );
+
+        }
+
+    }
+
+
+    if (dot) {
+
+        dot.classList.remove(
+            "good",
+            "warn",
+            "bad"
+        );
+
+
+        if (
+            statusValue === "BAIK"
+        ) {
+
+            dot.classList.add(
+                "good"
+            );
+
+        }
+
+        else if (
+            statusValue === "CUKUP"
+        ) {
+
+            dot.classList.add(
+                "warn"
+            );
+
+        }
+
+        else if (
+            statusValue === "BURUK"
+        ) {
+
+            dot.classList.add(
+                "bad"
+            );
+
+        }
+
+    }
+
+}
+
+
+// ============================================================
+// MODE UI
+// ============================================================
+
+function updateModeUI() {
+
+    const autoButton =
+        getElement("btn-auto");
+
+    const manualButton =
+        getElement("btn-manual");
+
+    const pump1 =
+        getElement("pump1-tog");
+
+    const pump2 =
+        getElement("pump2-tog");
+
+
+    const isAuto =
+        currentMode === "AUTO";
+
+
+    if (autoButton) {
+
+        autoButton.classList.toggle(
+            "active-auto",
+            isAuto
+        );
+
+    }
+
+
+    if (manualButton) {
+
+        manualButton.classList.toggle(
+            "active-manual",
+            !isAuto
+        );
+
+    }
+
+
+    // Pompa hanya bisa dikontrol
+    // ketika mode MANUAL
+
+    if (pump1) {
+
+        pump1.disabled =
+            isAuto;
+
+    }
+
+
+    if (pump2) {
+
+        pump2.disabled =
+            isAuto;
+
+    }
+
+}
+
+
+// ============================================================
+// POMPA ASAM UI
+// ============================================================
+
+function updatePompaAsamUI() {
+
+    const toggle =
+        getElement("pump1-tog");
+
+    const subtitle =
+        getElement("p1-sub");
+
+
+    const isOn =
+        currentPompaAsam === "ON";
+
+
+    if (toggle) {
+
+        toggle.checked =
+            isOn;
+
+    }
+
+
+    if (subtitle) {
+
+        subtitle.textContent =
+            isOn
+                ? "ON"
+                : "OFF";
+
+    }
+
+}
+
+
+// ============================================================
+// POMPA BASA UI
+// ============================================================
+
+function updatePompaBasaUI() {
+
+    const toggle =
+        getElement("pump2-tog");
+
+    const subtitle =
+        getElement("p2-sub");
+
+
+    const isOn =
+        currentPompaBasa === "ON";
+
+
+    if (toggle) {
+
+        toggle.checked =
+            isOn;
+
+    }
+
+
+    if (subtitle) {
+
+        subtitle.textContent =
+            isOn
+                ? "ON"
+                : "OFF";
+
+    }
+
+}
+
+
+// ============================================================
+// MODE CONTROL
+//
+// HTML Anda memanggil:
+//
+// setMode('auto')
+// setMode('manual')
+//
+// Karena itu fungsi harus GLOBAL.
+// ============================================================
+
+async function setMode(mode) {
+
+    const normalizedMode =
+        normalize(mode);
+
+
+    if (
+        normalizedMode !== "AUTO" &&
+        normalizedMode !== "MANUAL"
+    ) {
+
+        return;
+
+    }
+
+
+    try {
+
+        console.log(
+            "Mengirim mode:",
+            normalizedMode
+        );
+
+
+        const response =
+            await fetch(
+                API_MODE,
+                {
+
+                    method: "POST",
+
+                    headers: {
+                        "Content-Type":
+                            "application/json"
+                    },
+
+                    body:
+                        JSON.stringify({
+                            mode:
+                                normalizedMode
+                        })
+
+                }
+            );
+
+
+        const result =
+            await response.json();
+
+
+        console.log(
+            "Response mode:",
+            result
+        );
+
+
+        if (
+            !response.ok ||
+            !result.success
+        ) {
+
+            throw new Error(
+                result.message ||
+                "Gagal mengubah mode"
+            );
+
+        }
+
+
+        currentMode =
+            normalizedMode;
+
+        pendingMode =
+            normalizedMode;
+
+        pendingModeAt =
+            Date.now();
+
+
+        updateModeUI();
+
+
+        // Ambil status terbaru
+        setTimeout(
+            loadRealtime,
+            800
+        );
+
+
+    }
+    catch (error) {
+
+        console.error(
+            "Gagal mengubah mode:",
+            error
+        );
+
+
+        alert(
+            "Gagal mengubah mode:\n" +
+            error.message
+        );
+
+    }
+
+}
+
+
+// ============================================================
+// MAKE GLOBAL
+// Agar onclick HTML bisa menemukan fungsi
+// ============================================================
+
+window.setMode =
+    setMode;
+
+
+// ============================================================
+// KONTROL POMPA
+//
+// HTML Anda memanggil:
+//
+// togglePump(1)
+// togglePump(2)
+//
+// ============================================================
+
+async function togglePump(
+    pumpNumber
+) {
+
+    // ========================================================
+    // CEK MODE
+    // ========================================================
+
+    if (
+        currentMode !== "MANUAL"
+    ) {
+
+        alert(
+            "Ubah mode ke MANUAL terlebih dahulu"
+        );
+
+
+        // Kembalikan posisi toggle
+
+        if (
+            pumpNumber === 1
+        ) {
+
+            updatePompaAsamUI();
+
+        }
+
+        else if (
+            pumpNumber === 2
+        ) {
+
+            updatePompaBasaUI();
+
+        }
+
+
+        return;
+
+    }
+
+
+    let toggle;
+
+    let apiUrl;
+
+    let pumpName;
+
+
+    // ========================================================
+    // POMPA ASAM
+    // ========================================================
+
+    if (
+        pumpNumber === 1
+    ) {
+
+        toggle =
+            getElement(
+                "pump1-tog"
+            );
+
+        apiUrl =
+            API_POMPA_ASAM;
+
+        pumpName =
+            "Pompa Asam";
+
+    }
+
+
+    // ========================================================
+    // POMPA BASA
+    // ========================================================
+
+    else if (
+        pumpNumber === 2
+    ) {
+
+        toggle =
+            getElement(
+                "pump2-tog"
+            );
+
+        apiUrl =
+            API_POMPA_BASA;
+
+        pumpName =
+            "Pompa Basa";
+
+    }
+
+    else {
+
+        return;
+
+    }
+
+
+    if (!toggle) {
+
+        return;
+
+    }
+
+
+    const status =
+        toggle.checked
+            ? "ON"
+            : "OFF";
+
+
+    try {
+
+        console.log(
+            pumpName,
+            status
+        );
+
+
+        const response =
+            await fetch(
+                apiUrl,
+                {
+
+                    method: "POST",
+
+                    headers: {
+                        "Content-Type":
+                            "application/json"
+                    },
+
+                    body:
+                        JSON.stringify({
+                            status:
+                                status
+                        })
+
+                }
+            );
+
+
+        const result =
+            await response.json();
+
+
+        console.log(
+            "Response pompa:",
+            result
+        );
+
+
+        if (
+            !response.ok ||
+            !result.success
+        ) {
+
+            throw new Error(
+                result.message ||
+                `Gagal mengontrol ${pumpName}`
+            );
+
+        }
+
+
+        // ====================================================
+        // SIMPAN STATUS
+        // ====================================================
+
+        if (
+            pumpNumber === 1
+        ) {
+
+            currentPompaAsam =
+                status;
+
+            pendingPompaAsam =
+                status;
+
+            pendingPompaAsamAt =
+                Date.now();
+
+
+            updatePompaAsamUI();
+
+        }
+
+
+        if (
+            pumpNumber === 2
+        ) {
+
+            currentPompaBasa =
+                status;
+
+            pendingPompaBasa =
+                status;
+
+            pendingPompaBasaAt =
+                Date.now();
+
+
+            updatePompaBasaUI();
+
+        }
+
+
+        // Ambil data ESP32 terbaru
+
+        setTimeout(
+            loadRealtime,
+            800
+        );
+
+
+    }
+    catch (error) {
+
+        console.error(
+            `Gagal ${pumpName}:`,
+            error
+        );
+
+
+        alert(
+            `Gagal mengontrol ${pumpName}:\n` +
+            error.message
+        );
+
+
+        // Kembalikan toggle
+
+        if (
+            pumpNumber === 1
+        ) {
+
+            updatePompaAsamUI();
+
+        }
+
+        else {
+
+            updatePompaBasaUI();
+
+        }
+
+    }
+
+}
+
+
+// ============================================================
+// MAKE GLOBAL
+// ============================================================
+
+window.togglePump =
+    togglePump;
+
+
+// ============================================================
+// LOAD HISTORY
+// ============================================================
+
+async function loadHistory() {
+
+    try {
+
+        const response =
+            await fetch(
+                API_HISTORY,
+                {
+                    method: "GET",
+                    cache: "no-store"
+                }
+            );
+
+
+        if (!response.ok) {
+
+            throw new Error(
+                `HTTP ${response.status}`
+            );
+
+        }
+
+
+        const result =
+            await response.json();
+
+
+        console.log(
+            "History API:",
+            result
+        );
+
+
+        // ====================================================
+        // VALIDASI
+        // ====================================================
+
+        if (
+            !result.success ||
+            !Array.isArray(
+                result.data
+            )
+        ) {
+
+            throw new Error(
+                "Format response history tidak valid"
+            );
+
+        }
+
+
+        // ====================================================
+        // SIMPAN DATA ASLI
+        // ====================================================
+
+        historyData =
+            result.data;
+
+
+        // ====================================================
+        // DATA UNTUK CHART
+        // ====================================================
+
+        // API mengirim data urut lama -> baru (ASC).
+        // Untuk chart, batasi maksimal 10 titik waktu terakhir saja
+        // (data history sudah otomatis berjarak sekitar 5 menit sekali
+        // sesuai logika dedup di services/saveData.js).
+
+        const MAX_CHART_POINTS = 10;
+
+        const history =
+            result.data
+                .slice(-MAX_CHART_POINTS);
+
+
+        const labels = [];
+
+        const phData = [];
+
+        const suhuData = [];
+
+
+        // ====================================================
+        // PROSES HISTORY
+        // ====================================================
+
+        history.forEach(
+            function (item) {
+
+                // -------------------------------
+                // WAKTU
+                // -------------------------------
+
+                let waktu =
+                    "";
+
+
+                if (
+                    item.waktu
+                ) {
+
+                    const date =
+                        new Date(
+                            item.waktu
+                        );
+
+
+                    if (
+                        !Number.isNaN(
+                            date.getTime()
+                        )
+                    ) {
+
+                        waktu =
+                            date.toLocaleTimeString(
+                                "id-ID",
+                                {
+                                    hour:
+                                        "2-digit",
+
+                                    minute:
+                                        "2-digit"
+                                }
+                            );
+
+                    }
+
+                }
+
+
+                labels.push(
+                    waktu
+                );
+
+
+                // -------------------------------
+                // pH
+                // -------------------------------
+
+                const nilaiPh =
+                    Number(
+                        item.ph
+                    );
+
+
+                phData.push(
+                    Number.isFinite(
+                        nilaiPh
+                    )
+                        ? nilaiPh
+                        : null
+                );
+
+
+                // -------------------------------
+                // SUHU
+                // -------------------------------
+
+                const nilaiSuhu =
+                    Number(
+                        item.suhu
+                    );
+
+
+                suhuData.push(
+                    Number.isFinite(
+                        nilaiSuhu
+                    )
+                        ? nilaiSuhu
+                        : null
+                );
+
+            }
+        );
+
+
+        console.log(
+            "History jumlah:",
+            history.length
+        );
+
+        console.log(
+            "Chart labels:",
+            labels
+        );
+
+        console.log(
+            "Chart pH:",
+            phData
+        );
+
+        console.log(
+            "Chart suhu:",
+            suhuData
+        );
+
+
+        // ====================================================
+        // UPDATE CHART
+        // ====================================================
+
+        updateCharts(
+            labels,
+            phData,
+            suhuData
+        );
+
+
+        // ====================================================
+        // UPDATE TABEL
+        // ====================================================
+
+        updateHistoryTable(
+            result.data
+        );
+
+
+    }
+    catch (error) {
+
+        console.error(
+            "Gagal mengambil history:",
+            error
+        );
+
+    }
+
+}
+
+
+// ============================================================
+// UPDATE CHART
+// ============================================================
+
+function updateCharts(
+    labels,
+    phData,
+    suhuData
+) {
+
+    // ========================================================
+    // CEK CHART.JS
+    // ========================================================
+
+    if (
+        typeof Chart ===
+        "undefined"
+    ) {
+
+        console.error(
+            "Chart.js belum dimuat"
+        );
+
+        return;
+
+    }
+
+
+    // ========================================================
+    // WARNA TEKS CHART (putih, biar kebaca di background gelap)
+    // ========================================================
+
+    Chart.defaults.color =
+        "#ffffff";
+
+    Chart.defaults.borderColor =
+        "rgba(255, 255, 255, 0.15)";
+
+
+    // ========================================================
+    // CHART pH
+    // ========================================================
+
+    const phCanvas =
+        getElement(
+            "chart-ph"
+        );
+
+
+    if (!phCanvas) {
+
+        console.error(
+            "Canvas #chart-ph tidak ditemukan"
+        );
 
     }
     else {
 
-        dot.className =
-            "wq-dot bad";
+        if (
+            phChart
+        ) {
+
+            phChart.destroy();
+
+        }
+
+
+        phChart =
+            new Chart(
+                phCanvas,
+                {
+
+                    type: "line",
+
+                    data: {
+
+                        labels:
+                            labels,
+
+                        datasets: [
+
+                            {
+
+                                label:
+                                    "pH",
+
+                                data:
+                                    phData,
+
+                                borderColor:
+                                    "#22c55e",
+
+                                backgroundColor:
+                                    "rgba(34, 197, 94, 0.2)",
+
+                                pointBackgroundColor:
+                                    "#22c55e",
+
+                                pointBorderColor:
+                                    "#22c55e",
+
+                                borderWidth:
+                                    2,
+
+                                pointRadius:
+                                    3,
+
+                                tension:
+                                    0.35,
+
+                                fill:
+                                    true
+
+                            }
+
+                        ]
+
+                    },
+
+                    options: {
+
+                        responsive:
+                            true,
+
+                        maintainAspectRatio:
+                            false,
+
+                        animation:
+                            false,
+
+                        plugins: {
+
+                            legend: {
+
+                                display:
+                                    false
+
+                            }
+
+                        },
+
+                        scales: {
+
+                            y: {
+
+                                beginAtZero:
+                                    false,
+
+                                grid: {
+
+                                    display:
+                                        false
+
+                                },
+
+                                title: {
+
+                                    display:
+                                        true,
+
+                                    text:
+                                        "Nilai pH"
+
+                                }
+
+                            },
+
+                            x: {
+
+                                grid: {
+
+                                    display:
+                                        false
+
+                                },
+
+                                title: {
+
+                                    display:
+                                        true,
+
+                                    text:
+                                        "Waktu"
+
+                                }
+
+                            }
+
+                        }
+
+                    }
+
+                }
+            );
 
     }
 
-    document.getElementById(
-        "wq-index"
-    ).textContent =
-        (fz.crisp * 100)
-        .toFixed(2);
 
-    document.getElementById(
-        "wq-fit"
-    ).textContent =
-        wq.fit;
+    // ========================================================
+    // CHART SUHU
+    // ========================================================
 
-    document.getElementById(
-        "wq-fit"
-    ).style.color =
-        wq.color;
-
-    document.getElementById(
-        "wq-rec"
-    ).textContent =
-        wq.rec;
-
-    // Pump Info
-    document.getElementById(
-        "pump-aer-spd"
-    ).textContent =
-        pm.aerRPM + " RPM";
-
-    document.getElementById(
-        "pump-circ-spd"
-    ).textContent =
-        pm.circRPM + " RPM";
-
-    document.getElementById(
-        "pump-eff"
-    ).textContent =
-        pm.eff + " %";
-
-    // Auto Toggle
-    const tog1 =
-        document.getElementById(
-            "pump1-tog"
+    const tempCanvas =
+        getElement(
+            "chart-temp"
         );
 
-    const tog2 =
-        document.getElementById(
-            "pump2-tog"
+
+    if (!tempCanvas) {
+
+        console.error(
+            "Canvas #chart-temp tidak ditemukan"
         );
 
-    if (!tog1._manual) {
+    }
+    else {
 
-        tog1.checked =
-            pm.aerOn;
+        if (
+            tempChart
+        ) {
 
-        togglePump(1);
+            tempChart.destroy();
+
+        }
+
+
+        tempChart =
+            new Chart(
+                tempCanvas,
+                {
+
+                    type: "line",
+
+                    data: {
+
+                        labels:
+                            labels,
+
+                        datasets: [
+
+                            {
+
+                                label:
+                                    "Temperature (��C)",
+
+                                data:
+                                    suhuData,
+
+                                borderColor:
+                                    "#f97316",
+
+                                backgroundColor:
+                                    "rgba(249, 115, 22, 0.2)",
+
+                                pointBackgroundColor:
+                                    "#f97316",
+
+                                pointBorderColor:
+                                    "#f97316",
+
+                                borderWidth:
+                                    2,
+
+                                pointRadius:
+                                    3,
+
+                                tension:
+                                    0.35,
+
+                                fill:
+                                    true
+
+                            }
+
+                        ]
+
+                    },
+
+                    options: {
+
+                        responsive:
+                            true,
+
+                        maintainAspectRatio:
+                            false,
+
+                        animation:
+                            false,
+
+                        plugins: {
+
+                            legend: {
+
+                                display:
+                                    false
+
+                            }
+
+                        },
+
+                        scales: {
+
+                            y: {
+
+                                beginAtZero:
+                                    false,
+
+                                grid: {
+
+                                    display:
+                                        false
+
+                                },
+
+                                title: {
+
+                                    display:
+                                        true,
+
+                                    text:
+                                        "Suhu (��C)"
+
+                                }
+
+                            },
+
+                            x: {
+
+                                grid: {
+
+                                    display:
+                                        false
+
+                                },
+
+                                title: {
+
+                                    display:
+                                        true,
+
+                                    text:
+                                        "Waktu"
+
+                                }
+
+                            }
+
+                        }
+
+                    }
+
+                }
+
+            );
 
     }
 
-    if (!tog2._manual) {
-
-        tog2.checked =
-            pm.circOn;
-
-        togglePump(2);
-
-    }
 }
 
 
-// ======================================
-// CLOCK
-// ======================================
+// ============================================================
+// UPDATE HISTORY TABLE
+// ============================================================
+
+function updateHistoryTable(
+    data
+) {
+
+    const tbody =
+        getElement(
+            "data-tbody"
+        );
+
+
+    if (!tbody) {
+
+        return;
+
+    }
+
+
+    if (
+        !Array.isArray(data) ||
+        data.length === 0
+    ) {
+
+        tbody.innerHTML = `
+
+            <tr>
+
+                <td
+                    colspan="9"
+                    class="empty-cell"
+                >
+                    Belum ada data
+                </td>
+
+            </tr>
+
+        `;
+
+        return;
+
+    }
+
+
+    // API terbaru �� terlama
+
+    tbody.innerHTML =
+        [...data]
+            .reverse()
+            .map(
+            function (item) {
+
+                let tanggal =
+                    "-";
+
+                let jam =
+                    "-";
+
+
+                if (
+                    item.waktu
+                ) {
+
+                    const date =
+                        new Date(
+                            item.waktu
+                        );
+
+
+                    if (
+                        !Number.isNaN(
+                            date.getTime()
+                        )
+                    ) {
+
+                        tanggal =
+                            date.toLocaleDateString(
+                                "id-ID"
+                            );
+
+
+                        jam =
+                            date.toLocaleTimeString(
+                                "id-ID",
+                                {
+                                    hour:
+                                        "2-digit",
+
+                                    minute:
+                                        "2-digit"
+                                }
+                            );
+
+                    }
+
+                }
+
+
+                const ph =
+                    item.ph ??
+                    "-";
+
+
+                const suhu =
+                    item.suhu ??
+                    "-";
+
+
+                const fuzzy =
+                    item.fuzzy ??
+                    "-";
+
+
+                const pwm =
+                    item.pwm ??
+                    "-";
+
+
+                const kecepatan =
+                    item.kecepatan ??
+                    "-";
+
+
+                const estimasi =
+                    item.estimasi !== null &&
+                    item.estimasi !== undefined
+                        ? formatEtaDuration(
+                              Number(item.estimasi)
+                          )
+                        : "-";
+
+
+                const status =
+                    item.status ??
+                    "-";
+
+
+                return `
+
+                    <tr>
+
+                        <td>
+                            ${tanggal}
+                        </td>
+
+                        <td>
+                            ${jam}
+                        </td>
+
+                        <td>
+                            ${ph}
+                        </td>
+
+                        <td>
+                            ${suhu}
+                        </td>
+
+                        <td>
+                            ${fuzzy}
+                        </td>
+
+                        <td>
+                            ${pwm}
+                        </td>
+
+                        <td>
+                            ${kecepatan}
+                        </td>
+
+                        <td>
+                            ${estimasi}
+                        </td>
+
+                        <td>
+                            ${status}
+                        </td>
+
+                    </tr>
+
+                `;
+
+            }
+        )
+        .join("");
+
+}
+
+
+// ============================================================
+// UPDATE LAST UPDATE
+// ============================================================
+
+function updateLastUpdate(
+    waktu
+) {
+
+    if (!waktu) {
+
+        return;
+
+    }
+
+
+    const date =
+        new Date(
+            waktu
+        );
+
+
+    if (
+        Number.isNaN(
+            date.getTime()
+        )
+    ) {
+
+        return;
+
+    }
+
+
+    setText(
+        "tb-last",
+        date.toLocaleTimeString(
+            "id-ID",
+            {
+                hour:
+                    "2-digit",
+
+                minute:
+                    "2-digit"
+            }
+        )
+    );
+
+}
+
+
+// ============================================================
+// JAM DAN TANGGAL
+// ============================================================
 
 function updateClock() {
 
     const now =
         new Date();
 
-    document.getElementById(
-        "tb-time"
-    ).textContent =
-        now.toLocaleTimeString(
-            "id-ID",
-            {
-                hour12: false
-            }
-        );
 
-    document.getElementById(
-        "tb-date"
-    ).textContent =
+    const dateText =
         now.toLocaleDateString(
             "id-ID",
             {
-                weekday: "long",
-                year: "numeric",
-                month: "long",
-                day: "numeric"
+                weekday:
+                    "long",
+
+                day:
+                    "2-digit",
+
+                month:
+                    "long",
+
+                year:
+                    "numeric"
             }
         );
-}
-
-setInterval(
-    updateClock,
-    1000
-);
-
-updateClock();
 
 
-// ======================================
-// LOAD LATEST DATA
-// ======================================
-
-async function loadLatest() {
-
-    try {
-
-        const res =
-            await fetch(
-                "http://localhost/iot/latest.php"
-            );
-
-        const d =
-            await res.json();
-
-        document.getElementById(
-            "ph-val"
-        ).textContent =
-            parseFloat(
-                d.ph
-            ).toFixed(2);
-
-        document.getElementById(
-            "temp-val"
-        ).textContent =
-            parseFloat(
-                d.suhu
-            ).toFixed(2);
-
-        const ph =
-            parseFloat(d.ph);
-
-        const phBadge =
-            document.getElementById(
-                "ph-badge"
-            );
-
-        if (ph < 6.5) {
-
-            phBadge.className =
-                "sensor-badge badge-warn";
-
-            phBadge.textContent =
-                "Rendah";
-
-        }
-        else if (ph > 8.5) {
-
-            phBadge.className =
-                "sensor-badge badge-danger";
-
-            phBadge.textContent =
-                "Tinggi";
-
-        }
-        else {
-
-            phBadge.className =
-                "sensor-badge badge-good";
-
-            phBadge.textContent =
-                "Normal";
-
-        }
-
-        const temp =
-            parseFloat(
-                d.suhu
-            );
-
-        const tempBadge =
-            document.getElementById(
-                "temp-badge"
-            );
-
-        if (temp > 35) {
-
-            tempBadge.className =
-                "sensor-badge badge-danger";
-
-            tempBadge.textContent =
-                "Tinggi";
-
-        }
-        else {
-
-            tempBadge.className =
-                "sensor-badge badge-good";
-
-            tempBadge.textContent =
-                "Normal";
-
-        }
-
-        document.getElementById(
-            "esp-status"
-        ).textContent =
-            "Online";
-
-        document.getElementById(
-            "mqtt-status"
-        ).textContent =
-            "Connected";
-
-        document.getElementById(
-            "fz-crisp-big"
-        ).textContent =
-            d.fuzzy || "--";
-
-        document.getElementById(
-            "wq-label"
-        ).textContent =
-            d.status || "--";
-
-        const dot =
-            document.getElementById(
-                "wq-dot"
-            );
-
-        if (
-            (d.status || "")
-            .toUpperCase() ===
-            "BAIK"
-        ) {
-
-            dot.className =
-                "wq-dot";
-
-        }
-        else if (
-            (d.status || "")
-            .toUpperCase() ===
-            "SEDANG"
-        ) {
-
-            dot.className =
-                "wq-dot warn";
-
-        }
-        else {
-
-            dot.className =
-                "wq-dot bad";
-
-        }
-
-    }
-    catch (e) {
-
-        document.getElementById(
-            "ph-val"
-        ).textContent =
-            "11.43";
-
-        document.getElementById(
-            "temp-val"
-        ).textContent =
-            "42.80";
-    }
-
-    const now =
-        new Date();
-
-    document.getElementById(
-        "tb-last"
-    ).textContent =
+    const timeText =
         now.toLocaleTimeString(
             "id-ID",
             {
-                hour12: false
+                hour:
+                    "2-digit",
+
+                minute:
+                    "2-digit",
+
+                second:
+                    "2-digit"
             }
         );
-}
-// ======================================
-// LOAD HISTORY DATA
-// ======================================
 
-async function loadHistory() {
 
-    try {
+    setText(
+        "tb-date",
+        dateText
+    );
 
-        const res = await fetch(
-            "history.php"
-        );
 
-        const data = await res.json();
-
-        if (!Array.isArray(data))
-            return;
-
-        updateTable(data);
-        updateCharts(data);
-
-    }
-    catch (err) {
-
-        console.error(
-            "History Error:",
-            err
-        );
-
-    }
+    setText(
+        "tb-time",
+        timeText
+    );
 
 }
 
 
-// ======================================
-// UPDATE TABLE
-// ======================================
+// ============================================================
+// NAVIGASI
+// ============================================================
 
-function updateTable(data) {
+function initNavigation() {
 
-    const tbody =
-        document.getElementById(
-            "data-tbody"
+    const navItems =
+        document.querySelectorAll(
+            ".nav-item"
         );
 
-    tbody.innerHTML = "";
 
-    if (data.length === 0) {
+    navItems.forEach(
+        function (button) {
 
-        tbody.innerHTML = `
-        <tr>
-            <td colspan="6"
-                class="empty-cell">
-                Tidak ada data
-            </td>
-        </tr>`;
+            button.addEventListener(
+                "click",
+                function () {
 
-        return;
-    }
+                    const page =
+                        button.dataset.page;
 
-    data.forEach(row => {
 
-        const tr =
-            document.createElement("tr");
+                    if (!page) {
 
-        let tanggal = "-";
-        let jam = "-";
+                        return;
 
-        if (row.waktu) {
-
-            const dt =
-                new Date(row.waktu);
-
-            tanggal =
-                dt.toLocaleDateString(
-                    "id-ID"
-                );
-
-            jam =
-                dt.toLocaleTimeString(
-                    "id-ID",
-                    {
-                        hour12:false
                     }
-                );
-
-        }
-
-        tr.innerHTML = `
-            <td>${tanggal}</td>
-            <td>${jam}</td>
-            <td>${row.ph}</td>
-            <td>${row.suhu}</td>
-            <td>${row.fuzzy}</td>
-            <td>${row.status}</td>
-        `;
-
-        tbody.appendChild(tr);
-
-    });
-
-}
 
 
-// ======================================
-// UPDATE CHART
-// ======================================
+                    // Semua nav nonaktif
 
-function updateCharts(data) {
+                    document
+                        .querySelectorAll(
+                            ".nav-item"
+                        )
+                        .forEach(
+                            function (item) {
 
-    const lastData =
-        data.slice(-20);
+                                item.classList.remove(
+                                    "active"
+                                );
 
-    const labels =
-        lastData.map(item => {
+                            }
+                        );
 
-            if (!item.waktu)
-                return "";
 
-            return new Date(
-                item.waktu
-            ).toLocaleTimeString(
-                "id-ID",
-                {
-                    hour: "2-digit",
-                    minute: "2-digit"
+                    // Nav yang diklik aktif
+
+                    document
+                        .querySelectorAll(
+                            `.nav-item[data-page="${page}"]`
+                        )
+                        .forEach(
+                            function (item) {
+
+                                item.classList.add(
+                                    "active"
+                                );
+
+                            }
+                        );
+
+
+                    // Semua halaman sembunyikan
+
+                    document
+                        .querySelectorAll(
+                            ".page"
+                        )
+                        .forEach(
+                            function (item) {
+
+                                item.classList.remove(
+                                    "active"
+                                );
+
+                            }
+                        );
+
+
+                    // Halaman aktif
+
+                    const activePage =
+                        getElement(
+                            `page-${page}`
+                        );
+
+
+                    if (
+                        activePage
+                    ) {
+
+                        activePage.classList.add(
+                            "active"
+                        );
+
+                    }
+
+
+                    // Jika masuk Data,
+                    // refresh history
+
+                    if (
+                        page === "data"
+                    ) {
+
+                        loadHistory();
+
+                    }
+
                 }
             );
 
-        });
-
-    const phData =
-        lastData.map(
-            item => Number(item.ph)
-        );
-
-    const tempData =
-        lastData.map(
-            item => Number(item.suhu)
-        );
-
-    chartPH.data.labels =
-        labels;
-
-    chartPH.data.datasets[0].data =
-        phData;
-
-    chartPH.update();
-
-    chartTemp.data.labels =
-        labels;
-
-    chartTemp.data.datasets[0].data =
-        tempData;
-
-    chartTemp.update();
-
-}
-
-
-// ======================================
-// REFRESH BUTTON
-// ======================================
-
-document
-.getElementById(
-    "refresh-btn"
-)
-.addEventListener(
-    "click",
-    () => {
-
-        loadLatest();
-        loadHistory();
-
-    }
-);
-
-
-// ======================================
-// AUTO REFRESH
-// ======================================
-
-loadHistory();
-
-setInterval(
-    loadHistory,
-    5000
-);
-// ======================================
-// EXPORT EXCEL
-// ======================================
-
-async function exportExcel() {
-
-    try {
-
-        const res =
-            await fetch(
-                "history.php"
-            );
-
-        const data =
-            await res.json();
-
-        if (
-            !data ||
-            data.length === 0
-        ) {
-
-            alert(
-                "Data kosong!"
-            );
-
-            return;
         }
-
-        const wb =
-            XLSX.utils.book_new();
-
-        const ws =
-            XLSX.utils.json_to_sheet(
-                data
-            );
-
-        XLSX.utils.book_append_sheet(
-            wb,
-            ws,
-            "Riwayat Sensor"
-        );
-
-        // ==========================
-        // SUMMARY
-        // ==========================
-
-        const avgTemp =
-            (
-                data.reduce(
-                    (s, r) =>
-                        s + Number(r.suhu),
-                    0
-                )
-                / data.length
-            ).toFixed(2);
-
-        const avgPH =
-            (
-                data.reduce(
-                    (s, r) =>
-                        s + Number(r.ph),
-                    0
-                )
-                / data.length
-            ).toFixed(2);
-
-        const avgFuzzy =
-            (
-                data.reduce(
-                    (s, r) =>
-                        s + Number(r.fuzzy),
-                    0
-                )
-                / data.length
-            ).toFixed(2);
-
-        const baik =
-            data.filter(
-                r =>
-                String(r.status)
-                .toUpperCase()
-                === "BAIK"
-            ).length;
-
-        const buruk =
-            data.filter(
-                r =>
-                String(r.status)
-                .toUpperCase()
-                === "BURUK"
-            ).length;
-
-        const summary =
-        [
-            ["Parameter","Nilai"],
-            ["Rata-rata Suhu",avgTemp],
-            ["Rata-rata pH",avgPH],
-            ["Rata-rata Fuzzy",avgFuzzy],
-            ["Jumlah BAIK",baik],
-            ["Jumlah BURUK",buruk]
-        ];
-
-        const ws2 =
-            XLSX.utils.aoa_to_sheet(
-                summary
-            );
-
-        XLSX.utils.book_append_sheet(
-            wb,
-            ws2,
-            "Summary"
-        );
-
-        XLSX.writeFile(
-            wb,
-            "Monitoring_Kualitas_Air.xlsx"
-        );
-
-    }
-    catch(err) {
-
-        console.error(err);
-
-        alert(
-            "Gagal export Excel"
-        );
-
-    }
+    );
 
 }
 
 
-// ======================================
-// BUTTON EXPORT
-// ======================================
+// ============================================================
+// REFRESH BUTTON
+// ============================================================
 
-document
-.getElementById(
-    "export-btn"
-)
-.addEventListener(
-    "click",
-    exportExcel
-);
+function initRefresh() {
+
+    const button =
+        getElement(
+            "refresh-btn"
+        );
 
 
-// ======================================
-// KONTROL POMPA
-// ======================================
+    if (!button) {
 
-async function sendPumpControl(
-    pompa,
-    status
-) {
+        return;
 
-    try {
+    }
 
-        await fetch(
-            "control.php",
-            {
-                method: "POST",
 
-                headers: {
-                    "Content-Type":
-                    "application/x-www-form-urlencoded"
-                },
+    button.addEventListener(
+        "click",
+        async function () {
 
-                body:
-                    "pompa=" +
-                    encodeURIComponent(
-                        pompa
-                    ) +
-                    "&status=" +
-                    encodeURIComponent(
-                        status
-                    )
+            await loadRealtime();
+
+            await loadHistory();
+
+        }
+    );
+
+}
+
+
+// ============================================================
+// RESET DATA (HAPUS HISTORY)
+// ============================================================
+
+function initReset() {
+
+    const button =
+        getElement(
+            "reset-btn"
+        );
+
+
+    if (!button) {
+
+        return;
+
+    }
+
+
+    button.addEventListener(
+        "click",
+        async function () {
+
+            const konfirmasi =
+                confirm(
+                    "Yakin ingin menghapus SEMUA data history? " +
+                    "Tindakan ini tidak bisa dibatalkan."
+                );
+
+
+            if (!konfirmasi) {
+
+                return;
+
             }
+
+
+            button.disabled = true;
+
+            button.textContent =
+                "Menghapus...";
+
+
+            try {
+
+                const response =
+                    await fetch(
+                        API_HISTORY,
+                        {
+                            method: "DELETE"
+                        }
+                    );
+
+                const result =
+                    await response.json();
+
+
+                if (!result.success) {
+
+                    throw new Error(
+                        result.message ||
+                        "Gagal menghapus data"
+                    );
+
+                }
+
+
+                alert(
+                    "Data history berhasil dihapus."
+                );
+
+                await loadHistory();
+
+            } catch (error) {
+
+                console.error(
+                    "Gagal reset history:",
+                    error
+                );
+
+                alert(
+                    "Gagal menghapus data: " +
+                    error.message
+                );
+
+            } finally {
+
+                button.disabled = false;
+
+                button.textContent =
+                    "🗑 Reset Data";
+
+            }
+
+        }
+    );
+
+}
+
+
+// ============================================================
+// EXPORT EXCEL
+// ============================================================
+
+function initExport() {
+
+    const button =
+        getElement(
+            "export-btn"
+        );
+
+
+    if (!button) {
+
+        return;
+
+    }
+
+
+    button.addEventListener(
+        "click",
+        function () {
+
+            try {
+
+            if (
+                typeof XLSX ===
+                "undefined"
+            ) {
+
+                alert(
+                    "Library Excel belum tersedia"
+                );
+
+                return;
+
+            }
+
+
+            if (
+                !historyData.length
+            ) {
+
+                alert(
+                    "Belum ada data history"
+                );
+
+                return;
+
+            }
+
+
+            const exportData =
+                historyData.map(
+                    function (item) {
+
+                        const waktuDate =
+                            item.waktu
+                                ? new Date(item.waktu)
+                                : null;
+
+                        const tanggalStr =
+                            waktuDate &&
+                            !isNaN(waktuDate)
+                                ? waktuDate.toLocaleDateString(
+                                      "id-ID"
+                                  )
+                                : "";
+
+                        const jamStr =
+                            waktuDate &&
+                            !isNaN(waktuDate)
+                                ? waktuDate.toLocaleTimeString(
+                                      "id-ID",
+                                      {
+                                          hour:
+                                              "2-digit",
+
+                                          minute:
+                                              "2-digit",
+
+                                          second:
+                                              "2-digit"
+                                      }
+                                  )
+                                : "";
+
+                        return {
+
+                            Tanggal:
+                                tanggalStr,
+
+                            Jam:
+                                jamStr,
+
+                            "Suhu (°C)":
+                                item.suhu ??
+                                "",
+
+                            pH:
+                                item.ph ??
+                                "",
+
+                            "Nilai Fuzzy":
+                                item.fuzzy ??
+                                "",
+
+                            PWM:
+                                item.pwm ??
+                                "",
+
+                            Kecepatan:
+                                item.kecepatan ??
+                                "",
+
+                            "Estimasi Waktu (menit)":
+                                item.estimasi ??
+                                "",
+
+                            "Pompa Asam":
+                                item.pompa_asam ??
+                                "",
+
+                            "Pompa Basa":
+                                item.pompa_basa ??
+                                "",
+
+                            Mode:
+                                item.mode ??
+                                "",
+
+                            Status:
+                                item.status ??
+                                ""
+
+                        };
+
+                    }
+                );
+
+
+            const worksheet =
+                XLSX.utils.json_to_sheet(
+                    exportData
+                );
+
+
+            worksheet["!cols"] = [
+                { wch: 12 },
+                { wch: 8 },
+                { wch: 10 },
+                { wch: 8 },
+                { wch: 12 },
+                { wch: 8 },
+                { wch: 14 },
+                { wch: 18 },
+                { wch: 12 },
+                { wch: 12 },
+                { wch: 10 },
+                { wch: 10 }
+            ];
+
+
+            // ================================================
+            // SHEET RINGKASAN
+            // ================================================
+
+            const totalData =
+                historyData.length;
+
+            const jumlahBaik =
+                historyData.filter(
+                    function (x) {
+                        return (
+                            (x.status || "")
+                                .toUpperCase() ===
+                            "BAIK"
+                        );
+                    }
+                ).length;
+
+            const jumlahBuruk =
+                historyData.filter(
+                    function (x) {
+                        return (
+                            (x.status || "")
+                                .toUpperCase() ===
+                            "BURUK"
+                        );
+                    }
+                ).length;
+
+            const rataSuhu =
+                historyData.reduce(
+                    function (a, b) {
+                        return (
+                            a +
+                            parseFloat(
+                                b.suhu || 0
+                            )
+                        );
+                    },
+                    0
+                ) / totalData;
+
+            const rataPh =
+                historyData.reduce(
+                    function (a, b) {
+                        return (
+                            a +
+                            parseFloat(
+                                b.ph || 0
+                            )
+                        );
+                    },
+                    0
+                ) / totalData;
+
+            const rataFuzzy =
+                historyData.reduce(
+                    function (a, b) {
+                        return (
+                            a +
+                            parseFloat(
+                                b.fuzzy || 0
+                            )
+                        );
+                    },
+                    0
+                ) / totalData;
+
+            const worksheetRingkasan =
+                XLSX.utils.aoa_to_sheet([
+                    ["LAPORAN MONITORING KUALITAS AIR"],
+                    [""],
+                    [
+                        "Tanggal Export",
+                        new Date().toLocaleString("id-ID")
+                    ],
+                    ["Total Data", totalData],
+                    ["Jumlah BAIK", jumlahBaik],
+                    ["Jumlah BURUK", jumlahBuruk],
+                    [""],
+                    ["Rata-rata Suhu", rataSuhu.toFixed(2)],
+                    ["Rata-rata pH", rataPh.toFixed(2)],
+                    ["Rata-rata Fuzzy", rataFuzzy.toFixed(2)]
+                ]);
+
+
+            const workbook =
+                XLSX.utils.book_new();
+
+
+            XLSX.utils.book_append_sheet(
+                workbook,
+                worksheet,
+                "Data"
+            );
+
+            XLSX.utils.book_append_sheet(
+                workbook,
+                worksheetRingkasan,
+                "Ringkasan"
+            );
+
+
+            const tanggalFile =
+                new Date()
+                    .toLocaleDateString("id-ID")
+                    .replace(/\//g, "-");
+
+
+            XLSX.writeFile(
+                workbook,
+                "history-monitoring-kolam-" +
+                    tanggalFile +
+                    ".xlsx"
+            );
+
+            } catch (error) {
+
+                console.error(
+                    "Gagal export Excel:",
+                    error
+                );
+
+                alert(
+                    "Gagal export Excel: " +
+                    error.message
+                );
+
+            }
+
+        }
+    );
+
+}
+
+
+// ============================================================
+// INISIALISASI
+// ============================================================
+
+document.addEventListener(
+    "DOMContentLoaded",
+    async function () {
+
+        console.log(
+            "================================"
         );
 
         console.log(
-            pompa +
-            " -> " +
-            status
+            "Dashboard Node.js dimuat"
         );
 
-    }
-    catch(err) {
-
-        console.error(
-            "Control Error:",
-            err
+        console.log(
+            "================================"
         );
 
-    }
 
-}
+        // Jam
 
-
-// ======================================
-// PUMP MANUAL FLAG
-// ======================================
-
-document
-.getElementById(
-    "pump1-tog"
-)
-.addEventListener(
-    "change",
-    function() {
-
-        this._manual = true;
-
-    }
-);
-
-document
-.getElementById(
-    "pump2-tog"
-)
-.addEventListener(
-    "change",
-    function() {
-
-        this._manual = true;
-
-    }
-);
+        updateClock();
 
 
-// ======================================
-// DASHBOARD INIT
-// ======================================
-
-async function initDashboard() {
-
-    await loadLatest();
-
-    await loadHistory();
-
-}
-
-initDashboard();
+        setInterval(
+            updateClock,
+            1000
+        );
 
 
-// ======================================
-// AUTO REFRESH
-// ======================================
+        // Navigasi
 
-setInterval(
-    () => {
-
-        loadLatest();
-
-        loadHistory();
-
-    },
-    5000
-);
+        initNavigation();
 
 
-// ======================================
-// ONLINE STATUS
-// ======================================
+        // Reset Data
 
-window.addEventListener(
-    "online",
-    () => {
+        initReset();
 
-        document.getElementById(
-            "esp-status"
-        ).textContent =
-            "Online";
 
-    }
-);
+        // Export
 
-window.addEventListener(
-    "offline",
-    () => {
+        initExport();
 
-        document.getElementById(
-            "esp-status"
-        ).textContent =
-            "Offline";
+
+        // Data awal
+
+        await loadRealtime();
+
+        await loadHistory();
+
+
+        // ====================================================
+        // AUTO REFRESH REALTIME
+        // ====================================================
+
+        setInterval(
+            loadRealtime,
+            5000
+        );
+
+
+        // ====================================================
+        // AUTO REFRESH HISTORY + CHART
+        // Disamakan dengan jadwal simpan history di backend
+        // (services/saveData.js: maksimal 1x insert per 5 menit),
+        // jadi tidak perlu refresh lebih sering dari itu.
+        // ====================================================
+
+        setInterval(
+            loadHistory,
+            300000
+        );
+
+
+        console.log(
+            "Dashboard siap digunakan"
+        );
 
     }
 );
