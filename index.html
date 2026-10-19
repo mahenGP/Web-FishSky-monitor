@@ -121,11 +121,11 @@
       <!-- ══ BLUE CARD ROW ══ -->
       <div class="info-grid">
 
-        <!-- Nilai Fuzzy -->
+        <!-- Nilai  -->
         <div class="bc">
-          <div class="bc-title">Nilai Fuzzy</div>
+          <div class="bc-title">Nilai Output</div>
           <div class="bc-inner">
-            <div class="fz-big-label">Output Crisp</div>
+            <div class="fz-big-label">Output Diskret</div>
             <div class="fz-big" id="fz-crisp-big">--</div>
           </div>
           <!-- hidden ids still needed for JS -->
@@ -150,7 +150,7 @@
           <div class="bc-title">Estimasi Menuju Normal</div>
           <div class="bc-inner wq-eta-box">
             <div class="wq-eta-value" id="wq-eta-value">--</div>
-            <div class="wq-eta-sub">Berdasarkan Output Fuzzy</div>
+            <div class="wq-eta-sub">Berdasarkan Output Diskret</div>
           </div>
 
           <!-- hidden ids for JS -->
@@ -205,36 +205,64 @@
 
     <!-- ══ DATA PAGE ══ -->
     <div class="page" id="page-data">
+
       <div class="page-header">
         <div>
           <div class="page-heading">Data Sensor</div>
         </div>
+
         <div class="action-row">
-          <button class="btn-export" id="export-btn">⬇ Export Excel</button>
-          <button class="btn-refresh" id="reset-btn" style="background:rgba(248,113,113,0.15);color:#f87171;border-color:rgba(248,113,113,0.3)">🗑 Reset Data</button>
+          <button class="btn-export" id="export-btn">
+            ⬇ Export Excel
+          </button>
+
+          <button
+            class="btn-refresh"
+            id="reset-btn"
+            style="background:rgba(248,113,113,0.15);
+                  color:#f87171;
+                  border-color:rgba(248,113,113,0.3)">
+            🗑 Reset Data
+          </button>
         </div>
       </div>
+
       <div class="table-wrap">
-        <table class="data-table">
+
+        <table class="data-table" id="history-table">
+
           <thead>
             <tr>
               <th>Tanggal</th>
               <th>Jam</th>
               <th>pH</th>
               <th>Suhu (C)</th>
-              <th>Nilai Fuzzy</th>
+              <th>Nilai Output</th>
               <th>PWM</th>
+              <th>PWM %</th>
               <th>Kecepatan</th>
               <th>Estimasi Waktu</th>
               <th>Status</th>
+              <th>Mode</th>
             </tr>
           </thead>
-          <tbody id="data-tbody">
-            <tr><td colspan="9" class="empty-cell">Memuat data...</td></tr>
+
+          <tbody id="history-body">
+            <tr>
+              <td colspan="11" class="empty-cell">
+                Memuat data...
+              </td>
+            </tr>
           </tbody>
+
         </table>
+
       </div>
+
     </div>
+
+
+    
 
     <!-- ══ SETTINGS PAGE ══ -->
     <div class="page" id="page-settings">
@@ -243,6 +271,20 @@
           <div class="page-heading">Settings</div>
         </div>
       </div>
+              <div class="settings-card">
+          <div class="settings-title">Kalibrasi Sensor pH</div>
+          <div class="setting-row">
+            <span class="setting-label">Slope (m)</span>
+            <span class="setting-val" id="calib-status-m">-</span>
+          </div>
+          <div class="setting-row">
+            <span class="setting-label">Offset (c)</span>
+            <span class="setting-val" id="calib-status-c">-</span>
+          </div>
+          <button class="btn-calibrate" id="btn-open-calibration" onclick="openCalibrationModal()">
+            Kalibrasi pH (2 Titik)
+          </button>
+        </div>
       <div class="settings-grid">
         <div class="settings-card">
           <div class="settings-title">Koneksi</div>
@@ -264,37 +306,33 @@
           </div>
         </div>
         <div class="settings-card">
-          <div class="settings-title">Ambang Batas</div>
+          <div class="settings-title">Ambang Batas Ph</div>
           <div class="setting-row">
-            <span class="setting-label">pH Min</span>
-            <span class="setting-val">6.5</span>
+            <span class="setting-label">pH ASAM</span>
+            <span class="setting-val">pH < 6,5</span>
           </div>
           <div class="setting-row">
-            <span class="setting-label">pH Max</span>
-            <span class="setting-val">8.5</span>
+            <span class="setting-label">pH Netral</span>
+            <span class="setting-val">6,5 ≤ pH ≤ 7,5</span>
           </div>
           <div class="setting-row">
-            <span class="setting-label">Suhu Max (°C)</span>
-            <span class="setting-val">35.0</span>
-          </div>
-          <div class="setting-row">
-            <span class="setting-label">Suhu Max (°C)</span>
-            <span class="setting-val">20.0</span>
+            <span class="setting-label">pH BASA</span>
+            <span class="setting-val">pH > 7,5</span>
           </div>
         </div>
         <div class="settings-card">
-          <div class="settings-title">Notifikasi</div>
+          <div class="settings-title">Ambang Batas SUHU</div>
           <div class="setting-row">
-            <span class="setting-label">Alert Email</span>
-            <label class="tog"><input type="checkbox" checked/><span class="tog-sl"></span></label>
+            <span class="setting-label">SUHU DINGIN</span>
+            <span class="setting-val">Suhu < 23°C</span>
           </div>
           <div class="setting-row">
-            <span class="setting-label">Alert Telegram</span>
-            <label class="tog"><input type="checkbox"/><span class="tog-sl"></span></label>
+            <span class="setting-label">SUHU NORMAL</span>
+            <span class="setting-val">23°C ≤ Suhu ≤ 30°C</span>
           </div>
           <div class="setting-row">
-            <span class="setting-label">Push Notification</span>
-            <label class="tog"><input type="checkbox" checked/><span class="tog-sl"></span></label>
+            <span class="setting-label">SUHU PANAS</span>
+            <span class="setting-val">Suhu > 30°C</span>
           </div>
         </div>
         <div class="settings-card">
@@ -333,6 +371,115 @@
     <span class="label">Settings</span>
   </button>
 </nav>
+
+<!-- ══ MODAL KALIBRASI PH (2 TITIK, LIVE VIA MQTT) ══ -->
+<div class="modal-overlay" id="calib-modal-overlay">
+  <div class="modal-box">
+
+    <div class="modal-header">
+      <div class="modal-title">Kalibrasi Sensor pH — 2 Titik</div>
+      <button class="modal-close" onclick="closeCalibrationModal()">✕</button>
+    </div>
+
+    <div class="modal-body">
+
+      <!-- STEP INDICATOR -->
+      <div class="calib-steps">
+        <div class="calib-step" id="calib-step-1">
+          <span class="calib-step-num">1</span>
+          <span class="calib-step-label">Buffer pH 4.0</span>
+        </div>
+        <div class="calib-step-line"></div>
+        <div class="calib-step" id="calib-step-2">
+          <span class="calib-step-num">2</span>
+          <span class="calib-step-label">Buffer pH 7.0</span>
+        </div>
+        <div class="calib-step-line"></div>
+        <div class="calib-step" id="calib-step-3">
+          <span class="calib-step-num">✓</span>
+          <span class="calib-step-label">Selesai</span>
+        </div>
+      </div>
+
+      <!-- STATE: IDLE (belum mulai) -->
+      <div class="calib-panel" id="calib-panel-idle">
+        <p class="modal-desc">
+          Siapkan larutan buffer pH 4.0 dan pH 7.0. Proses berjalan otomatis
+          per titik: ESP32 mengambil sampel ADC sampai stabil, lalu kamu
+          tinggal konfirmasi untuk lanjut ke titik berikutnya.
+        </p>
+      </div>
+
+      <!-- STATE: SEDANG SAMPLING / MENUNGGU KONFIRMASI -->
+      <div class="calib-panel" id="calib-panel-running" style="display:none;">
+        <div class="calib-live-title" id="calib-live-title">Buffer pH 4.0</div>
+        <div class="calib-live-msg" id="calib-live-msg">Menghubungkan...</div>
+
+        <div class="calib-live-grid">
+          <div class="calib-live-item">
+            <span class="calib-live-label">ADC Sekarang</span>
+            <span class="calib-live-val" id="calib-live-adc">--</span>
+          </div>
+          <div class="calib-live-item">
+            <span class="calib-live-label">Selisih Min-Max</span>
+            <span class="calib-live-val" id="calib-live-selisih">--</span>
+          </div>
+        </div>
+
+        <div class="calib-progress-track">
+          <div class="calib-progress-fill" id="calib-progress-fill"></div>
+        </div>
+        <div class="calib-progress-text" id="calib-progress-text">0 / 10 sampel</div>
+
+        <div class="calib-badge" id="calib-stabil-badge" style="display:none;">
+          ✓ ADC Stabil — Siap Dikonfirmasi
+        </div>
+      </div>
+
+      <!-- STATE: SELESAI -->
+      <div class="calib-panel" id="calib-panel-selesai" style="display:none;">
+        <div class="calib-badge success">✓ Kalibrasi Berhasil</div>
+        <div class="calib-preview">
+          <div class="calib-preview-row"><span>Slope (m)</span><span id="calib-hasil-m">-</span></div>
+          <div class="calib-preview-row"><span>Offset (c)</span><span id="calib-hasil-c">-</span></div>
+          <div class="calib-preview-row"><span>ADC pH 4.0</span><span id="calib-hasil-adc4">-</span></div>
+          <div class="calib-preview-row"><span>ADC pH 7.0</span><span id="calib-hasil-adc7">-</span></div>
+        </div>
+      </div>
+
+      <!-- STATE: GAGAL -->
+      <div class="calib-panel" id="calib-panel-gagal" style="display:none;">
+        <div class="calib-badge failed" id="calib-gagal-pesan">✕ Kalibrasi Gagal</div>
+      </div>
+
+      <div class="modal-note">
+        ⚠ Pompa otomatis dimatikan selama kalibrasi berlangsung.
+      </div>
+
+    </div>
+
+    <div class="modal-footer" id="calib-footer-idle">
+      <button class="btn-refresh" onclick="closeCalibrationModal()">Batal</button>
+      <button class="btn-export" onclick="startCalibration()">Mulai Kalibrasi</button>
+    </div>
+
+    <div class="modal-footer" id="calib-footer-running" style="display:none;">
+      <button class="btn-refresh" onclick="cancelCalibration()">Batal</button>
+      <button class="btn-refresh" id="calib-btn-retry" onclick="calibrationAction('retry')">Ambil Ulang</button>
+      <button class="btn-export" id="calib-btn-confirm" onclick="calibrationAction('confirm')" disabled>Konfirmasi &amp; Lanjut</button>
+    </div>
+
+    <div class="modal-footer" id="calib-footer-selesai" style="display:none;">
+      <button class="btn-export" onclick="closeCalibrationModal()">Tutup</button>
+    </div>
+
+    <div class="modal-footer" id="calib-footer-gagal" style="display:none;">
+      <button class="btn-refresh" onclick="closeCalibrationModal()">Tutup</button>
+      <button class="btn-export" onclick="startCalibration()">Coba Lagi</button>
+    </div>
+
+  </div>
+</div>
 
 <script src="script.js"></script>
 </body>
