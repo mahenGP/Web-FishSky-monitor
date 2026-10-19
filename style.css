@@ -93,8 +93,15 @@
       padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 700;
       margin-bottom: 4px;
     }
-    .mode-badge.auto   { background: rgba(96,200,255,0.15); color: var(--cyan); }
-    .mode-badge.manual { background: rgba(251,146,60,0.15);  color: var(--orange); }
+    .mode-btn.active#btn-auto {
+    background: #22c55e !important;
+    color: #fff !important;
+}
+
+.mode-btn.active#btn-manual {
+    background: #f59e0b !important;
+    color: #fff !important;
+}
 
     /* disabled pump toggle in auto mode */
     .ptog input:disabled + .ptog-sl { opacity: 0.35; cursor: not-allowed; }
@@ -304,6 +311,142 @@
     .tog input:checked + .tog-sl::before { transform: translateX(18px); }
 
     /* ══════════════════════════════
+       KALIBRASI PH
+    ══════════════════════════════ */
+
+    .btn-calibrate {
+      width: 100%; margin-top: 14px; padding: 10px 14px;
+      background: var(--cyan-dim); color: var(--cyan);
+      border: 1px solid var(--cyan); border-radius: 8px;
+      font-size: 13px; font-weight: 600; cursor: pointer;
+      transition: background 0.2s, color 0.2s;
+    }
+    .btn-calibrate:hover { background: var(--cyan); color: #0a2156; }
+
+    .modal-overlay {
+      display: none; position: fixed; inset: 0; z-index: 999;
+      background: rgba(4, 12, 36, 0.72);
+      align-items: center; justify-content: center;
+      padding: 20px;
+    }
+    .modal-overlay.open { display: flex; }
+
+    .modal-box {
+      width: 100%; max-width: 440px; max-height: 90vh; overflow-y: auto;
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: 16px; box-shadow: 0 20px 60px rgba(0,0,0,0.45);
+    }
+
+    .modal-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 18px 20px; border-bottom: 1px solid var(--border);
+    }
+    .modal-title { font-size: 14px; font-weight: 700; color: var(--text); }
+    .modal-close {
+      background: transparent; border: none; color: var(--muted);
+      font-size: 16px; cursor: pointer; line-height: 1; padding: 4px;
+    }
+    .modal-close:hover { color: var(--text); }
+
+    .modal-body { padding: 20px; }
+    .modal-desc { font-size: 12px; color: var(--muted); margin-bottom: 18px; line-height: 1.5; }
+
+    .calib-point {
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: 10px; padding: 14px; margin-bottom: 14px;
+    }
+    .calib-point-head {
+      display: flex; align-items: center; gap: 8px;
+      font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 12px;
+    }
+    .calib-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .calib-dot.buffer4 { background: var(--orange); }
+    .calib-dot.buffer7 { background: var(--green); }
+
+    .form-row { display: flex; flex-direction: column; gap: 6px; }
+    .form-row label { font-size: 11px; color: var(--muted); }
+    .form-row input {
+      background: var(--bg2); border: 1px solid var(--border); color: var(--text);
+      border-radius: 8px; padding: 9px 12px; font-size: 13px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .form-row input:focus { outline: none; border-color: var(--cyan); }
+
+    .calib-preview {
+      background: var(--cyan-dim); border: 1px solid var(--cyan);
+      border-radius: 10px; padding: 12px 14px; margin-bottom: 14px;
+    }
+    .calib-preview-row {
+      display: flex; justify-content: space-between; font-size: 12px;
+      color: var(--text); padding: 3px 0; font-family: 'JetBrains Mono', monospace;
+    }
+
+    .modal-note {
+      font-size: 11px; color: var(--yellow); background: rgba(250,204,21,0.1);
+      border: 1px solid rgba(250,204,21,0.3); border-radius: 8px;
+      padding: 10px 12px; line-height: 1.5;
+    }
+
+    .modal-footer {
+      display: flex; justify-content: flex-end; gap: 10px;
+      padding: 16px 20px; border-top: 1px solid var(--border);
+      flex-wrap: wrap;
+    }
+
+    /* ── Step indicator ── */
+    .calib-steps {
+      display: flex; align-items: center; margin-bottom: 20px;
+    }
+    .calib-step {
+      display: flex; flex-direction: column; align-items: center; gap: 6px;
+      flex-shrink: 0;
+    }
+    .calib-step-num {
+      width: 26px; height: 26px; border-radius: 50%;
+      background: var(--bg); border: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 12px; font-weight: 700; color: var(--muted);
+      transition: background 0.2s, border-color 0.2s, color 0.2s;
+    }
+    .calib-step-label { font-size: 10px; color: var(--muted); white-space: nowrap; }
+    .calib-step-line { flex: 1; height: 1px; background: var(--border); margin: 0 6px 18px; }
+    .calib-step.active .calib-step-num { background: var(--cyan); border-color: var(--cyan); color: #0a2156; }
+    .calib-step.active .calib-step-label { color: var(--text); }
+    .calib-step.done .calib-step-num { background: var(--green); border-color: var(--green); color: #0a2156; }
+    .calib-step.done .calib-step-label { color: var(--text); }
+
+    /* ── Live panel ── */
+    .calib-live-title { font-size: 15px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
+    .calib-live-msg { font-size: 12px; color: var(--muted); margin-bottom: 16px; line-height: 1.5; min-height: 32px; }
+
+    .calib-live-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px;
+    }
+    .calib-live-item {
+      background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
+      padding: 12px; display: flex; flex-direction: column; gap: 4px;
+    }
+    .calib-live-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+    .calib-live-val { font-family: 'JetBrains Mono', monospace; font-size: 20px; font-weight: 600; color: var(--text); }
+
+    .calib-progress-track {
+      width: 100%; height: 8px; border-radius: 6px; background: var(--bg);
+      border: 1px solid var(--border); overflow: hidden; margin-bottom: 6px;
+    }
+    .calib-progress-fill {
+      height: 100%; width: 0%; background: var(--cyan); transition: width 0.3s ease;
+    }
+    .calib-progress-text { font-size: 11px; color: var(--muted); margin-bottom: 14px; }
+
+    .calib-badge {
+      text-align: center; font-size: 12px; font-weight: 600; padding: 10px 14px;
+      border-radius: 10px; background: var(--cyan-dim); color: var(--cyan);
+      border: 1px solid var(--cyan);
+    }
+    .calib-badge.success { background: rgba(74,222,128,0.15); color: var(--green); border-color: var(--green); }
+    .calib-badge.failed { background: rgba(248,113,113,0.15); color: var(--red); border-color: var(--red); margin-bottom: 14px; }
+
+    /* ══════════════════════════════
        BLUE CARD ROW (Fuzzy, Status, Pompa)
     ══════════════════════════════ */
     .info-grid {
@@ -334,7 +477,7 @@
       padding: 13px 15px;
     }
 
-    /* ── Nilai Fuzzy ── */
+    /* ── Nilai diskret── */
     .fz-row {
       display: flex; justify-content: space-between; align-items: center;
       padding: 5px 0; border-bottom: 1px solid rgba(255,255,255,0.1);
@@ -385,6 +528,45 @@
     .wq-eta-sub { font-size: 11px; color: var(--cyan); font-weight: 500; }
 
     /* ── Kontrol Pompa ── */
+    /* ── MODE SWITCH ── */
+
+    .mode-switch-wrap {
+        display: flex;
+        align-items: center;
+        gap: 0;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        overflow: hidden;
+        width: 100%;
+    }
+
+    .mode-btn {
+        flex: 1;
+        padding: 7px 10px;
+        font-size: 12px;
+        font-weight: 600;
+        border: none;
+        cursor: pointer;
+        font-family: 'Inter', sans-serif;
+        background: transparent;
+        color: var(--muted);
+        transition: background 0.2s, color 0.2s;
+        text-align: center;
+    }
+
+    /* AUTO AKTIF */
+    .mode-btn.active#btn-auto {
+        background: #22c55e !important;
+        color: #fff !important;
+    }
+
+    /* MANUAL AKTIF */
+    .mode-btn.active#btn-manual {
+        background: #f59e0b !important;
+        color: #fff !important;
+    }
+        
     .pump-item {
       display: flex; align-items: center; justify-content: space-between;
       padding: 10px 14px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
